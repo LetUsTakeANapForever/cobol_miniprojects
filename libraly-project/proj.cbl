@@ -110,11 +110,11 @@
            05  FOUND-COUNT                 PIC 9(1).
            05  WS-UPDATE                   PIC A      VALUE 'N'.
            05  TOTAL-DAYS                  PIC 9(4).
-           05  DIFF-MONTH                  PIC 9(4)   VALUE ZERO.
-           05  TOTAL-MONTHS                PIC 9(4)   VALUE ZERO.
+           05  DIFF-YEAR                  PIC 9(4)   VALUE ZERO.
            05  DAYS-OF-THE-MONTH           PIC 99.
            05  DUE-DATE-TEMP-D             PIC 99.
            05  DIFF-DATE                   PIC 99.
+           05  MONTH-ARG                   PIC 99.
        01  EDT-VARS.
            05  EDT-COPY-NO                 PIC Z9.
            05  EDT-ST                      PIC X(25).
@@ -166,9 +166,8 @@
            05  NEW-TR-FINE                 PIC 9(5).
        PROCEDURE DIVISION.
        MAIN-PROCEDURE.
-      *>       PERFORM 0000MAIN-LOGIN.
-      *>       PERFORM 1000MAIN-MENU.
-            PERFORM 500TRANSACTION-REPORT.
+            PERFORM 0000MAIN-LOGIN.
+            PERFORM 1000MAIN-MENU.
             STOP RUN.
        0000MAIN-LOGIN.
            PERFORM TEST AFTER UNTIL FOUND-COUNT = 1
@@ -378,6 +377,7 @@
                                    MOVE "NOT AVAILABLE" TO BOOK-STATUS
                                   END-IF
                                   PERFORM 003GET-LATEST-TR-ID
+                                  SET WS-NOT-END-OF-FILE TO TRUE
                                   ADD 1 TO TR-ID
                                   MOVE TR-ID TO NEW-TR-ID
                                   MOVE INPUT-ISBN TO NEW-TR-ISBN
@@ -453,8 +453,10 @@
                                        "Enter transaction ID: "
                                   ACCEPT INPUT-TR-ID
                                   PERFORM 0034CHECK-TR-ID
+                                  SET WS-NOT-END-OF-FILE TO TRUE
                                   IF FOUND-COUNT = 0
-                                      EXIT PERFORM
+                                      CLOSE BOOK-FILE, BOOK-TEMP-FILE
+                                      EXIT PARAGRAPH
                                   END-IF
                                   ADD 1 TO COPY-NO
                                   MOVE "AVAILABLE" TO BOOK-STATUS
@@ -622,6 +624,7 @@
                MOVE NEW-TR-ID TO TR-ID
                MOVE NEW-TR-ISBN TO TR-ISBN
                MOVE NEW-TR-MEMBER-ID TO TR-MEMBER-ID
+               MOVE NEW-TR-BORROW-DATE TO TR-BORROW-DATE
                MOVE NEW-TR-DUE-DATE TO TR-DUE-DATE
                MOVE NEW-TR-RETURN-DATE TO TR-RETURN-DATE
                MOVE NEW-TR-RETURN-STATUS TO TR-RETURN-STATUS
@@ -666,12 +669,15 @@
        00544CALCULATE-DUE-DATE.
       *>      DUE = BORROW-DATE + 7 DAYS
            ADD 7 TO BORROW-D GIVING DUE-DATE-TEMP-D.
+           MOVE BORROW-M TO MONTH-ARG.
            PERFORM GET-DAYS-OF-THE-MONTH.
 
       *>      CASE 1: WITHIN MONTH, WITHIN YEAR
            IF DUE-DATE-TEMP-D < DAYS-OF-THE-MONTH
-               AND BORROW-M NOT = 12
                MOVE DUE-DATE-TEMP-D TO TR-DUE-D
+               MOVE BORROW-M TO TR-DUE-M
+               MOVE BORROW-Y TO TR-DUE-Y
+               DISPLAY "Due Date : " TR-DUE-DATE
                EXIT PARAGRAPH
            END-IF.
 
@@ -681,6 +687,7 @@
                    GIVING DIFF-DATE
                ADD 1 TO BORROW-M GIVING TR-DUE-M
                MOVE DIFF-DATE TO TR-DUE-D
+               MOVE BORROW-Y TO TR-DUE-Y
            ELSE
       *>          CASE 3: NEW MONTH, NEW YEAR
                SUBTRACT DUE-DATE-TEMP-D FROM DAYS-OF-THE-MONTH
@@ -690,7 +697,6 @@
                MOVE DIFF-DATE TO TR-DUE-D
            END-IF.
 
-      *>      MOVE "20250916" TO TR-DUE-DATE.
            DISPLAY "Due Date : " TR-DUE-DATE.
        00555CALCULATE-FINE.
            PERFORM CAL_DAYS_OVERDUE.
@@ -725,19 +731,17 @@
            .
        CAL_DAYS_OVERDUE.
            MOVE ZERO TO TOTAL-DAYS.
-           MOVE ZERO TO TOTAL-MONTHS.
            IF (TR-DUE-D = RETURN-D AND TR-DUE-M = RETURN-M
                AND TR-DUE-Y = RETURN-Y)
                OR (TR-DUE-D > RETURN-D AND TR-DUE-M = RETURN-M
                AND TR-DUE-Y = RETURN-Y)
-               OR ((TR-DUE-M > RETURN-M)
-               AND TR-DUE-Y >= RETURN-Y)
+               OR ((TR-DUE-M > RETURN-M) AND TR-DUE-Y >= RETURN-Y)
+               OR (TR-DUE-Y > RETURN-Y)
                    EXIT PARAGRAPH
            END-IF
            IF (TR-DUE-D = RETURN-D AND TR-DUE-M = RETURN-M
                AND TR-DUE-Y < RETURN-Y)
-               PERFORM GET-TOTAL-MONTHS
-               MOVE TOTAL-MONTHS TO TOTAL-DAYS
+               PERFORM GET-TOTAL-YEARS-AS-DAYS
                EXIT PARAGRAPH
            END-IF
            IF TR-DUE-D < RETURN-D AND TR-DUE-M = RETURN-M
@@ -746,8 +750,8 @@
                        GIVING TOTAL-DAYS
                    EXIT PARAGRAPH
                END-IF
-           IF (TR-DUE-D < RETURN-D AND TR-DUE-M < RETURN-M)
-               OR (TR-DUE-M < RETURN-M)
+           IF TR-DUE-M < RETURN-M
+               MOVE TR-DUE-M TO MONTH-ARG
                PERFORM GET-DAYS-OF-THE-MONTH
                SUBTRACT TR-DUE-D FROM DAYS-OF-THE-MONTH
                    GIVING TOTAL-DAYS
@@ -756,46 +760,49 @@
            IF TR-DUE-Y < RETURN-Y
                PERFORM UNTIL TR-DUE-Y = RETURN-Y
                    PERFORM UNTIL TR-DUE-M > 12
+                       MOVE TR-DUE-M TO MONTH-ARG
                        PERFORM GET-DAYS-OF-THE-MONTH
                            ADD DAYS-OF-THE-MONTH TO TOTAL-DAYS
                            ADD 1 TO TR-DUE-M
                        END-PERFORM
                    ADD 1 TO TR-DUE-Y
+                   MOVE 1 TO TR-DUE-M
                END-PERFORM
-               SET TR-DUE-M TO 1
                PERFORM UNTIL TR-DUE-M = RETURN-M
-               PERFORM GET-DAYS-OF-THE-MONTH
-               ADD DAYS-OF-THE-MONTH TO TOTAL-DAYS
-               ADD 1 TO TR-DUE-M
+                   MOVE TR-DUE-M TO MONTH-ARG
+                   PERFORM GET-DAYS-OF-THE-MONTH
+                   ADD DAYS-OF-THE-MONTH TO TOTAL-DAYS
+                   ADD 1 TO TR-DUE-M
                END-PERFORM
                ADD RETURN-D TO TOTAL-DAYS
                EXIT PARAGRAPH
            END-IF.
            PERFORM UNTIL TR-DUE-M = RETURN-M
+               MOVE TR-DUE-M TO MONTH-ARG
                PERFORM GET-DAYS-OF-THE-MONTH
                ADD DAYS-OF-THE-MONTH TO TOTAL-DAYS
                ADD 1 TO TR-DUE-M
            END-PERFORM.
            ADD RETURN-D TO TOTAL-DAYS.
        GET-DAYS-OF-THE-MONTH.
-           EVALUATE TR-DUE-M
-               WHEN "01" MOVE 31 TO DAYS-OF-THE-MONTH
-               WHEN "02" MOVE 28 TO DAYS-OF-THE-MONTH
-               WHEN "03" MOVE 31 TO DAYS-OF-THE-MONTH
-               WHEN "04" MOVE 30 TO DAYS-OF-THE-MONTH
-               WHEN "05" MOVE 31 TO DAYS-OF-THE-MONTH
-               WHEN "06" MOVE 30 TO DAYS-OF-THE-MONTH
-               WHEN "07" MOVE 31 TO DAYS-OF-THE-MONTH
-               WHEN "08" MOVE 31 TO DAYS-OF-THE-MONTH
-               WHEN "09" MOVE 30 TO DAYS-OF-THE-MONTH
-               WHEN "10" MOVE 31 TO DAYS-OF-THE-MONTH
-               WHEN "11" MOVE 30 TO DAYS-OF-THE-MONTH
-               WHEN "12" MOVE 31 TO DAYS-OF-THE-MONTH
+           EVALUATE MONTH-ARG
+               WHEN 1 MOVE 31 TO DAYS-OF-THE-MONTH
+               WHEN 2 MOVE 28 TO DAYS-OF-THE-MONTH
+               WHEN 3 MOVE 31 TO DAYS-OF-THE-MONTH
+               WHEN 4 MOVE 30 TO DAYS-OF-THE-MONTH
+               WHEN 5 MOVE 31 TO DAYS-OF-THE-MONTH
+               WHEN 6 MOVE 30 TO DAYS-OF-THE-MONTH
+               WHEN 7 MOVE 31 TO DAYS-OF-THE-MONTH
+               WHEN 8 MOVE 31 TO DAYS-OF-THE-MONTH
+               WHEN 9 MOVE 30 TO DAYS-OF-THE-MONTH
+               WHEN 10 MOVE 31 TO DAYS-OF-THE-MONTH
+               WHEN 11 MOVE 30 TO DAYS-OF-THE-MONTH
+               WHEN 12 MOVE 31 TO DAYS-OF-THE-MONTH
            END-EVALUATE.
-       GET-TOTAL-MONTHS.
+       GET-TOTAL-YEARS-AS-DAYS.
                IF (TR-DUE-M = RETURN-M)
                    SUBTRACT TR-DUE-Y FROM RETURN-Y
-                       GIVING DIFF-MONTH
+                       GIVING DIFF-YEAR
                END-IF.
-               MULTIPLY 365 BY DIFF-MONTH GIVING TOTAL-MONTHS.
+               MULTIPLY 365 BY DIFF-YEAR GIVING TOTAL-DAYS.
        END PROGRAM LIBRARY-PROJECT.
